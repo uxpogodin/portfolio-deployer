@@ -1,14 +1,22 @@
 name: Keep Portfolio Deploy Alive
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: true
 
 jobs:
   restore:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PORTFOLIO_PAT }}
 
       - name: Check and restore deploy.yml
         env:
@@ -17,30 +25,26 @@ jobs:
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/uxpogodin/uxpogodin.github.io/contents/.github/workflows/deploy.yml")
-
           echo "deploy.yml status: $STATUS"
-
           if [ "$STATUS" != "200" ]; then
             echo "deploy.yml missing! Restoring..."
-
             CONTENT=$(base64 -w 0 deploy-template.yml)
-
-            RESPONSE=$(curl -s -X PUT \
+            curl -s -X PUT \
               -H "Authorization: token $GH_TOKEN" \
               -H "Content-Type: application/json" \
               "https://api.github.com/repos/uxpogodin/uxpogodin.github.io/contents/.github/workflows/deploy.yml" \
-              -d "{\"message\": \"ci: restore deploy.yml\", \"content\": \"$CONTENT\"}")
-
-            echo "$RESPONSE" | grep -o '"sha":"[^"]*"' || echo "Done"
-
-            echo "Triggering deploy..."
-            curl -s -X POST \
-              -H "Authorization: token $GH_TOKEN" \
-              -H "Content-Type: application/json" \
-              "https://api.github.com/repos/uxpogodin/uxpogodin.github.io/actions/workflows/deploy.yml/dispatches" \
-              -d '{"ref": "main"}'
-
-            echo "deploy.yml restored and deploy triggered!"
+              -d "{\"message\": \"ci: restore deploy.yml\", \"content\": \"$CONTENT\"}"
+            echo "deploy.yml restored!"
           else
-            echo "deploy.yml is present, nothing to do."
+            echo "deploy.yml present, nothing to do."
           fi
+
+      - name: Self-trigger next check in 5 min
+        run: |
+          sleep 300
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .heartbeat
+          git add .heartbeat
+          git commit -m "chore: heartbeat"
+          git push
